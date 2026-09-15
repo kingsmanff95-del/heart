@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Для тебя</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden}
+body{background:#fffafb;font-family:Arial,sans-serif}
+canvas{position:fixed;inset:0;width:100%;height:100%}
+#go{
+ position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+ width:76px;height:76px;border:0;border-radius:50%;background:#fff;
+ box-shadow:0 12px 45px rgba(190,80,105,.16);
+ color:#e85b78;font-size:31px;cursor:pointer;transition:.45s
+}
+#go:hover{transform:translate(-50%,-50%) scale(1.08)}
+#go.hide{opacity:0;pointer-events:none}
+.hint{
+ position:fixed;left:50%;bottom:8%;transform:translateX(-50%);
+ color:#aa9299;font-size:13px;letter-spacing:.12em;transition:1s
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="go">♥</button>
+<div class="hint">нажми</div>
+
+<script>
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+const button=document.getElementById('go');
+const hint=document.querySelector('.hint');
+
+let W,H,D=1,started=false,startTime=0,particles=[];
+
+function resize(){
+  D=Math.min(devicePixelRatio||1,2);
+  W=innerWidth; H=innerHeight;
+  canvas.width=W*D;
+  canvas.height=H*D;
+  ctx.setTransform(D,0,0,D,0,0);
+
+  if(!started) drawIdle();
+}
+resize();
+addEventListener('resize',resize);
+
+// A real heart outline, sampled from the classic parametric heart curve.
+function heartPolygon(){
+  const pts=[];
+  const scale=Math.min(W,H)*0.0305;
+  const cx=W/2;
+  const cy=H/2+scale*0.4;
+
+  for(let i=0;i<=720;i++){
+    const t=i/720*Math.PI*2;
+    const x=16*Math.pow(Math.sin(t),3);
+    const y=-(13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t));
+    pts.push([cx+x*scale,cy+y*scale]);
+  }
+  return {pts,cx,cy,scale};
+}
+
+function pointInPolygon(x,y,poly){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i][0],yi=poly[i][1];
+    const xj=poly[j][0],yj=poly[j][1];
+    const hit=((yi>y)!=(yj>y)) &&
+      (x < (xj-xi)*(y-yi)/(yj-yi)+xi);
+    if(hit) inside=!inside;
+  }
+  return inside;
+}
+
+// Empty negative-space letter "M" in the center of the heart.
+function distanceToSegment(px,py,ax,ay,bx,by){
+  const vx=bx-ax, vy=by-ay;
+  const wx=px-ax, wy=py-ay;
+  const len=vx*vx+vy*vy;
+  const t=Math.max(0,Math.min(1,(wx*vx+wy*vy)/len));
+  const dx=px-(ax+t*vx), dy=py-(ay+t*vy);
+  return Math.hypot(dx,dy);
+}
+
+function isMGap(x,y,cx,cy,scale){
+  const X=(x-cx)/scale;
+  const Y=(y-cy)/scale;
+
+  // M is deliberately carved as negative space:
+  // two outer vertical strokes + two diagonals meeting in the middle.
+  const strokes=[
+    [-0.52,-0.48,-0.52,0.48],
+    [-0.52,-0.48, 0.00,0.02],
+    [ 0.00,0.02, 0.52,-0.48],
+    [ 0.52,-0.48,0.52,0.48]
+  ];
+
+  const thickness=0.115;
+  return strokes.some(([ax,ay,bx,by]) =>
+    distanceToSegment(X,Y,ax,ay,bx,by)<thickness
+  );
+}
+
+function buildHeart(){
+  particles=[];
+  const shape=heartPolygon();
+
+  // Dense square pixels: no deliberate gaps.
+  const px=Math.max(5,Math.min(9,Math.round(Math.min(W,H)/95)));
+  const left=W*0.08,right=W*0.92,top=H*0.08,bottom=H*0.92;
+
+  for(let y=top;y<=bottom;y+=px){
+    for(let x=left;x<=right;x+=px){
+      if(pointInPolygon(x+px/2,y+px/2,shape.pts) &&
+       !isMGap(x+px/2,y+px/2,shape.cx,shape.cy,Math.min(W,H)/3.0)){
+        const dx=x+px/2-shape.cx;
+        const dy=y+px/2-shape.cy;
+        const radius=Math.hypot(dx,dy);
+        let angle=Math.atan2(dy,dx);
+        if(angle<0)angle+=Math.PI*2;
+
+        particles.push({
+          tx:x,ty:y,size:px+0.7,
+          radius,angle,
+          x:shape.cx,y:shape.cy
+        });
+      }
+    }
+  }
+
+  // True circular/spiral construction: center first, then expanding rings.
+  particles.sort((a,b)=>{
+    const r=a.radius-b.radius;
+    if(Math.abs(r)>px) return r;
+    return a.angle-b.angle;
+  });
+
+  let lastRadius=-1,ring=0;
+  for(const p of particles){
+    if(lastRadius<0 || p.radius-lastRadius>px*1.25){
+      ring++; lastRadius=p.radius;
+    }
+    p.delay=ring*115+(p.angle/(Math.PI*2))*260+Math.random()*90;
+    p.duration=950+Math.random()*450;
+  }
+}
+
+function drawIdle(){
+  ctx.clearRect(0,0,W,H);
+}
+
+function animate(now){
+  ctx.clearRect(0,0,W,H);
+
+  if(started){
+    for(const p of particles){
+      const e=now-startTime-p.delay;
+      if(e<0)continue;
+
+      const k=Math.min(1,e/p.duration);
+      const ease=1-Math.pow(1-k,3);
+
+      // Each pixel travels from the center along a circular sweep.
+      const startR=0;
+      const r=startR+(p.radius-startR)*ease;
+
+      // The movement winds around the center while expanding.
+      const winding=(1-ease)*Math.PI*1.35;
+      const a=p.angle+winding;
+
+      p.x=W/2+Math.cos(a)*r;
+      p.y=H/2+Math.sin(a)*r;
+
+      ctx.globalAlpha=Math.min(1,e/160);
+      ctx.fillStyle='#e85b78';
+      ctx.fillRect(Math.round(p.x),Math.round(p.y),p.size,p.size);
+    }
+    ctx.globalAlpha=1;
+  }
+
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+button.addEventListener('click',()=>{
+  if(started)return;
+  started=true;
+  startTime=performance.now();
+  buildHeart();
+  button.classList.add('hide');
+  hint.style.opacity=0;
+});
+</script>
+</body>
+</html>
